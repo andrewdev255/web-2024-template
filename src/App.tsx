@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import useLocalStorageState from "use-local-storage-state";
 import styled from "styled-components";
 import {
@@ -12,8 +12,23 @@ import {
   FormControl,
   InputLabel,
   Grid,
+  IconButton,
 } from "@mui/material";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
+import DeleteIcon from "@mui/icons-material/Delete";
+import { db } from './firebaseConfig';
+import { 
+  collection, 
+  addDoc, 
+  query, 
+  onSnapshot, 
+  Timestamp,
+  where,
+  deleteDoc,
+  doc,
+  setDoc,
+  getDoc 
+} from 'firebase/firestore';
 
 interface UserData {
   age: number;
@@ -31,11 +46,12 @@ interface DailyNorms {
 }
 
 interface MealEntry {
-  id: number;
+  id?: string;
   calories: number;
   protein: number;
   fats: number;
   carbs: number;
+  timestamp: Timestamp;
 }
 
 const AppContainer = styled.div`
@@ -71,9 +87,9 @@ function App() {
     carbs: 0
   });
 
-  const [mealEntries, setMealEntries] = useLocalStorageState<MealEntry[]>("mealEntries", {
-    defaultValue: [],
-  });
+  const [mealEntries, setMealEntries] = useState<MealEntry[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const [newMeal, setNewMeal] = useState({
     calories: 0,
@@ -82,7 +98,61 @@ function App() {
     carbs: 0
   });
 
-  const calculateDailyNorms = () => {
+  // Загрузка данных пользователя при первом рендере
+  useEffect(() => {
+    const loadUserData = async () => {
+      try {
+        const userDocRef = doc(db, 'userData', 'user');
+        const userDocSnap = await getDoc(userDocRef);
+        
+        if (userDocSnap.exists()) {
+          const data = userDocSnap.data() as UserData;
+          setUserData(data);
+          
+          // Если есть сохраненные нормы, загружаем их
+          if (data.dailyNorms) {
+            setDailyNorms(data.dailyNorms);
+            setShowSecondScreen(true);
+          }
+        }
+      } catch (error) {
+        setError('Ошибка при загрузке данных пользователя: ' + (error as Error).message);
+      }
+    };
+
+    loadUserData();
+  }, []);
+
+  // Загрузка приемов пищи за текущий день
+  useEffect(() => {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const endOfDay = new Date();
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const q = query(
+      collection(db, 'meals'),
+      where('timestamp', '>=', Timestamp.fromDate(startOfDay)),
+      where('timestamp', '<=', Timestamp.fromDate(endOfDay))
+    );
+
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const meals: MealEntry[] = [];
+      querySnapshot.forEach((doc) => {
+        meals.push({ id: doc.id, ...doc.data() } as MealEntry);
+      });
+      setMealEntries(meals);
+      setIsLoading(false);
+    }, (error) => {
+      setError('Ошибка при загрузке данных: ' + error.message);
+      setIsLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const calculateDailyNorms = async () => {
     // Формула Харриса-Бенедикта
     let bmr = 0;
     if (userData.gender === 'male') {
@@ -92,21 +162,53 @@ function App() {
     }
     
     const calories = Math.round(bmr * userData.activityLevel);
-    const protein = Math.round(userData.weight * 1.6); // 1.6г белка на кг веса
-    const fats = Math.round((calories * 0.3) / 9); // 30% калорий из жиров
-    const carbs = Math.round((calories - (protein * 4) - (fats * 9)) / 4); // оставшиеся калории из углеводов
+    const protein = Math.round(userData.weight * 1.6);
+    const fats = Math.round((calories * 0.3) / 9);
+    const carbs = Math.round((calories - (protein * 4) - (fats * 9)) / 4);
 
-    setDailyNorms({ calories, protein, fats, carbs });
-    setShowSecondScreen(true);
+    const newDailyNorms = { calories, protein, fats, carbs };
+    setDailyNorms(newDailyNorms);
+
+    try {
+      // Сохраняем данные пользователя и рассчитанные нормы
+      await setDoc(doc(db, 'userData', 'user'), {
+        ...userData,
+        dailyNorms: newDailyNorms,
+        lastUpdated: Timestamp.now()
+      });
+      setShowSecondScreen(true);
+    } catch (error) {
+      setError('Ошибка при сохранении данных: ' + (error as Error).message);
+    }
   };
 
-  const handleAddMeal = () => {
+  const handleUserDataChange = async (newData: Partial<UserData>) => {
+    const updatedData = { ...userData, ...newData };
+    setUserData(updatedData);
+  };
+
+  const handleAddMeal = async () => {
     if (Object.values(newMeal).some(value => value > 0)) {
-      setMealEntries([
-        ...mealEntries,
-        { id: Date.now(), ...newMeal }
-      ]);
-      setNewMeal({ calories: 0, protein: 0, fats: 0, carbs: 0 });
+      try {
+        const mealData = {
+          ...newMeal,
+          timestamp: Timestamp.now(),
+          userId: 'user' // Привязываем приём пищи к пользователю
+        };
+        
+        await addDoc(collection(db, 'meals'), mealData);
+        setNewMeal({ calories: 0, protein: 0, fats: 0, carbs: 0 });
+      } catch (error) {
+        setError('Ошибка при сохранении: ' + (error as Error).message);
+      }
+    }
+  };
+
+  const handleDeleteMeal = async (mealId: string) => {
+    try {
+      await deleteDoc(doc(db, 'meals', mealId));
+    } catch (error) {
+      setError('Ошибка при удалении: ' + (error as Error).message);
     }
   };
 
@@ -133,7 +235,7 @@ function App() {
                   label="Возраст"
                   type="number"
                   value={userData.age || ''}
-                  onChange={(e) => setUserData({ ...userData, age: Number(e.target.value) })}
+                  onChange={(e) => handleUserDataChange({ age: Number(e.target.value) })}
                 />
               </Grid>
               <Grid item xs={12} sm={6}>
@@ -141,7 +243,7 @@ function App() {
                   <InputLabel>Пол</InputLabel>
                   <Select
                     value={userData.gender}
-                    onChange={(e) => setUserData({ ...userData, gender: e.target.value as 'male' | 'female' })}
+                    onChange={(e) => handleUserDataChange({ gender: e.target.value as 'male' | 'female' })}
                   >
                     <MenuItem value="male">Мужской</MenuItem>
                     <MenuItem value="female">Женский</MenuItem>
@@ -154,7 +256,7 @@ function App() {
                   label="Вес (кг)"
                   type="number"
                   value={userData.weight || ''}
-                  onChange={(e) => setUserData({ ...userData, weight: Number(e.target.value) })}
+                  onChange={(e) => handleUserDataChange({ weight: Number(e.target.value) })}
                 />
               </Grid>
               <Grid item xs={12} sm={6}>
@@ -163,7 +265,7 @@ function App() {
                   label="Рост (см)"
                   type="number"
                   value={userData.height || ''}
-                  onChange={(e) => setUserData({ ...userData, height: Number(e.target.value) })}
+                  onChange={(e) => handleUserDataChange({ height: Number(e.target.value) })}
                 />
               </Grid>
               <Grid item xs={12}>
@@ -171,7 +273,7 @@ function App() {
                   <InputLabel>Уровень активности</InputLabel>
                   <Select
                     value={userData.activityLevel}
-                    onChange={(e) => setUserData({ ...userData, activityLevel: Number(e.target.value) })}
+                    onChange={(e) => handleUserDataChange({ activityLevel: Number(e.target.value) })}
                   >
                     <MenuItem value={1.2}>Сидячий образ жизни</MenuItem>
                     <MenuItem value={1.375}>Легкая активность</MenuItem>
@@ -307,6 +409,52 @@ function App() {
                   </Typography>
                 </Grid>
               </Grid>
+            </CardContent>
+          </StyledCard>
+
+          <StyledCard>
+            <CardContent>
+              <Typography variant="h6" gutterBottom>
+                Приёмы пищи за сегодня
+              </Typography>
+              {isLoading ? (
+                <Typography>Загрузка...</Typography>
+              ) : error ? (
+                <Typography color="error">{error}</Typography>
+              ) : (
+                <Grid container spacing={2}>
+                  {mealEntries.map((meal) => (
+                    <Grid item xs={12} key={meal.id}>
+                      <Card variant="outlined">
+                        <CardContent>
+                          <Grid container spacing={2} alignItems="center">
+                            <Grid item xs={3}>
+                              <Typography>Калории: {meal.calories}</Typography>
+                            </Grid>
+                            <Grid item xs={3}>
+                              <Typography>Белки: {meal.protein}г</Typography>
+                            </Grid>
+                            <Grid item xs={3}>
+                              <Typography>Жиры: {meal.fats}г</Typography>
+                            </Grid>
+                            <Grid item xs={2}>
+                              <Typography>Углеводы: {meal.carbs}г</Typography>
+                            </Grid>
+                            <Grid item xs={1}>
+                              <IconButton 
+                                onClick={() => meal.id && handleDeleteMeal(meal.id)}
+                                size="small"
+                              >
+                                <DeleteIcon />
+                              </IconButton>
+                            </Grid>
+                          </Grid>
+                        </CardContent>
+                      </Card>
+                    </Grid>
+                  ))}
+                </Grid>
+              )}
             </CardContent>
           </StyledCard>
         </>
