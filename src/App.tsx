@@ -1,17 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import useLocalStorageState from "use-local-storage-state";
 import styled from "styled-components";
 import {
   Typography,
   TextField,
   Button,
-  List,
-  ListItem,
-  ListItemText,
-  ListItemSecondaryAction,
-  IconButton,
-  Checkbox,
-  Box,
   Card,
   CardContent,
   Select,
@@ -20,8 +13,6 @@ import {
   InputLabel,
   Grid,
 } from "@mui/material";
-import DeleteIcon from "@mui/icons-material/Delete";
-import EditIcon from "@mui/icons-material/Edit";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 
 interface UserData {
@@ -60,12 +51,6 @@ const StyledCard = styled(Card)`
 const StyledButton = styled(Button)`
   && {
     margin-top: 1rem;
-  }
-`;
-
-const StyledListItemText = styled(ListItemText)<{ done: boolean }>`
-  && {
-    text-decoration: ${(props) => (props.done ? "line-through" : "none")};
   }
 `;
 
