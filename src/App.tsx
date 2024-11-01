@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import useLocalStorageState from "use-local-storage-state";
 import styled from "styled-components";
 import {
   Typography,
@@ -36,6 +35,7 @@ interface UserData {
   weight: number;
   height: number;
   activityLevel: number;
+  dailyNorms?: DailyNorms;
 }
 
 interface DailyNorms {
